@@ -1,5 +1,5 @@
 #command options
-CC := gcc
+CC := gcc-8
 RM := rm -rf
 MKDIR := mkdir -p
 FORMATTER := clang-format-7
