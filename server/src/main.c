@@ -5,12 +5,141 @@
 #include <netdb.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+struct info {
+  SSL_CTX *context;
+  int clientFD;
+  int socketFD;
+};
+
+void *handleConnection(void *args) {
+  SSL_CTX *context = ((struct info *)args)->context;
+  int clientFD = ((struct info *)args)->clientFD;
+  int socketFD = ((struct info *)args)->socketFD;
+  free(args);
+
+  SSL *connection = SSL_new(context);
+
+  if (connection == NULL) {
+    SSL_CTX_free(context);
+    close(clientFD);
+    close(socketFD);
+    fprintf(stderr, "Could not establish TLS connection (null connection)\n");
+    exit(EXIT_FAILURE);
+  }
+
+  SSL_CTX_free(context);
+
+  if (SSL_set_fd(connection, clientFD) == 0) {
+    ERR_clear_error();
+    SSL_free(connection);
+    close(clientFD);
+    close(socketFD);
+    fprintf(
+        stderr,
+        "Could not establish TLS connection (can't set client socket fd)\n");
+    exit(EXIT_FAILURE);
+  }
+
+  if (SSL_accept(connection) != 1) {
+    SSL_free(connection);
+    close(clientFD);
+    close(socketFD);
+    fprintf(stderr, "Could not establish TLS connection (can't accept)\n");
+    exit(EXIT_FAILURE);
+  }
+
+  char *buffer = malloc(4096);
+
+  // read message
+  int numRead = SSL_read(connection, buffer, 4096);
+
+  if (numRead <= 0) {
+    switch (SSL_get_error(connection, numRead)) {
+      case SSL_ERROR_ZERO_RETURN: {
+        // other side gracefully closed, close from our end
+        SSL_shutdown(connection);
+        SSL_free(connection);
+        close(clientFD);
+        close(socketFD);
+        fprintf(stderr, "Connection unexpectedly closed by client.\n");
+        exit(EXIT_FAILURE);
+      }
+      case SSL_ERROR_WANT_CONNECT:
+      case SSL_ERROR_WANT_ACCEPT:
+      case SSL_ERROR_WANT_X509_LOOKUP:
+      case SSL_ERROR_WANT_CLIENT_HELLO_CB: {
+        // non-fatal error, give up anyways
+        if (SSL_shutdown(connection) == 0) SSL_shutdown(connection);
+        SSL_free(connection);
+        close(clientFD);
+        close(socketFD);
+        fprintf(stderr, "Message not read first try. Giving up.\n");
+        exit(EXIT_FAILURE);
+      }
+      case SSL_ERROR_SYSCALL:
+      case SSL_ERROR_SSL:
+      default: {
+        // fatal error, connection forcefully closes
+        SSL_free(connection);
+        close(clientFD);
+        close(socketFD);
+        fprintf(stderr, "Connection broken.\n");
+        exit(EXIT_FAILURE);
+      }
+    }
+  }
+
+  buffer[4095] = '\0';
+
+  // write message
+  int retVal = SSL_write(connection, buffer, strlen(buffer) + 1);
+  if (retVal <= 0) {
+    switch (SSL_get_error(connection, retVal)) {
+      case SSL_ERROR_ZERO_RETURN: {
+        // other side closed their connection gracefully
+        SSL_shutdown(connection);
+        SSL_free(connection);
+        close(clientFD);
+        close(socketFD);
+        fprintf(stderr, "Client unexpectedly closed connection.\n");
+        exit(EXIT_FAILURE);
+      }
+      case SSL_ERROR_WANT_CONNECT:
+      case SSL_ERROR_WANT_ACCEPT:
+      case SSL_ERROR_WANT_X509_LOOKUP:
+      case SSL_ERROR_WANT_CLIENT_HELLO_CB: {
+        // non-fatal error, give up anyways
+        if (SSL_shutdown(connection) == 0) SSL_shutdown(connection);
+        SSL_free(connection);
+        close(clientFD);
+        close(socketFD);
+        fprintf(stderr, "Message not sent first try. Giving up.\n");
+        exit(EXIT_FAILURE);
+      }
+      case SSL_ERROR_SYSCALL:
+      case SSL_ERROR_SSL:
+      default: {
+        // fatal error, connection forcefully closes
+        SSL_free(connection);
+        close(clientFD);
+        close(socketFD);
+        fprintf(stderr, "Connection broken.\n");
+        exit(EXIT_FAILURE);
+      }
+    }
+  }
+
+  close(clientFD);
+  pthread_exit(NULL);
+}
 
 int main(int argc, char *argv[]) {
   if (argc != 1) {
@@ -74,7 +203,7 @@ int main(int argc, char *argv[]) {
 
   freeaddrinfo(results);
 
-  if (listen(socketFD, 1) != 0) {
+  if (listen(socketFD, 4) != 0) {
     close(socketFD);
     fprintf(stderr, "Could not listen on candidate socket.\n");
     exit(EXIT_FAILURE);
@@ -104,116 +233,22 @@ int main(int argc, char *argv[]) {
     exit(EXIT_FAILURE);
   }
 
-  int clientFD = accept(socketFD, NULL, NULL);
-  if (clientFD < 0) {
-    SSL_CTX_free(context);
-    close(socketFD);
-    fprintf(stderr, "Could not accept client connection.\n");
-    exit(EXIT_FAILURE);
-  }
-  close(socketFD);
-
-  SSL *connection = SSL_new(context);
-
-  if (connection == NULL) {
-    SSL_CTX_free(context);
-    close(clientFD);
-    fprintf(stderr, "Could not establish TLS connection (null connection)\n");
-    exit(EXIT_FAILURE);
-  }
-
-  SSL_CTX_free(context);
-
-  if (SSL_set_fd(connection, clientFD) == 0) {
-    ERR_clear_error();
-    SSL_free(connection);
-    close(clientFD);
-    fprintf(
-        stderr,
-        "Could not establish TLS connection (can't set client socket fd)\n");
-    exit(EXIT_FAILURE);
-  }
-
-  if (SSL_accept(connection) != 1) {
-    SSL_free(connection);
-    close(clientFD);
-    fprintf(stderr, "Could not establish TLS connection (can't accept)\n");
-    exit(EXIT_FAILURE);
-  }
-
-  char *buffer = malloc(4096);
-
-  // read message
-  int numRead = SSL_read(connection, buffer, 4096);
-
-  if (numRead <= 0) {
-    switch (SSL_get_error(connection, numRead)) {
-      case SSL_ERROR_ZERO_RETURN: {
-        // other side gracefully closed, close from our end
-        SSL_shutdown(connection);
-        SSL_free(connection);
-        close(clientFD);
-        fprintf(stderr, "Connection unexpectedly closed by client.\n");
-        exit(EXIT_FAILURE);
-      }
-      case SSL_ERROR_WANT_CONNECT:
-      case SSL_ERROR_WANT_ACCEPT:
-      case SSL_ERROR_WANT_X509_LOOKUP:
-      case SSL_ERROR_WANT_CLIENT_HELLO_CB: {
-        // non-fatal error, give up anyways
-        if (SSL_shutdown(connection) == 0) SSL_shutdown(connection);
-        SSL_free(connection);
-        close(clientFD);
-        fprintf(stderr, "Message not read first try. Giving up.\n");
-        exit(EXIT_FAILURE);
-      }
-      case SSL_ERROR_SYSCALL:
-      case SSL_ERROR_SSL:
-      default: {
-        // fatal error, connection forcefully closes
-        SSL_free(connection);
-        close(clientFD);
-        fprintf(stderr, "Connection broken.\n");
-        exit(EXIT_FAILURE);
-      }
+  while (true) {
+    int clientFD = accept(socketFD, NULL, NULL);
+    if (clientFD < 0) {
+      SSL_CTX_free(context);
+      close(socketFD);
+      fprintf(stderr, "Could not accept client connection.\n");
+      exit(EXIT_FAILURE);
     }
-  }
 
-  buffer[4095] = '\0';
+    struct info *args = malloc(sizeof(struct info));
+    args->context = context;
+    args->clientFD = clientFD;
+    args->socketFD = socketFD;
 
-  // write message
-  retVal = SSL_write(connection, buffer, strlen(buffer) + 1);
-  if (retVal <= 0) {
-    switch (SSL_get_error(connection, retVal)) {
-      case SSL_ERROR_ZERO_RETURN: {
-        // other side closed their connection gracefully
-        SSL_shutdown(connection);
-        SSL_free(connection);
-        close(clientFD);
-        fprintf(stderr, "Client unexpectedly closed connection.\n");
-        exit(EXIT_FAILURE);
-      }
-      case SSL_ERROR_WANT_CONNECT:
-      case SSL_ERROR_WANT_ACCEPT:
-      case SSL_ERROR_WANT_X509_LOOKUP:
-      case SSL_ERROR_WANT_CLIENT_HELLO_CB: {
-        // non-fatal error, give up anyways
-        if (SSL_shutdown(connection) == 0) SSL_shutdown(connection);
-        SSL_free(connection);
-        close(clientFD);
-        fprintf(stderr, "Message not sent first try. Giving up.\n");
-        exit(EXIT_FAILURE);
-      }
-      case SSL_ERROR_SYSCALL:
-      case SSL_ERROR_SSL:
-      default: {
-        // fatal error, connection forcefully closes
-        SSL_free(connection);
-        close(clientFD);
-        fprintf(stderr, "Connection broken.\n");
-        exit(EXIT_FAILURE);
-      }
-    }
+    pthread_t thread;
+    pthread_create(&thread, NULL, handleConnection, args);
   }
 
   exit(EXIT_SUCCESS);
