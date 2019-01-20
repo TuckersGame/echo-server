@@ -1,4 +1,5 @@
 bin/
 dependencies/
-sslstream.h
-libsslstream.so
+echoClient
+echoServer
+*.pem
