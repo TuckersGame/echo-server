@@ -26,7 +26,7 @@ int main(int argc, char *argv[]) {
 
   struct addrinfo *results;
   struct addrinfo hints = {AI_ADDRCONFIG | AI_NUMERICSERV | AI_PASSIVE,
-                           AF_INET6,
+                           AF_INET,
                            SOCK_STREAM,
                            0,
                            0,

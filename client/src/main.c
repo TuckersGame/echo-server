@@ -42,9 +42,11 @@ int main(int argc, char *argv[]) {
   if (retVal != 0) {
     close(socketFD);
     fprintf(stderr, "Could not get address info.\n");
+    exit(EXIT_FAILURE);
   } else if (results == NULL) {
     close(socketFD);
     fprintf(stderr, "Could not get address info.\n");
+    exit(EXIT_FAILURE);
   }
 
   for (struct addrinfo *possible = results; possible != NULL;
@@ -57,12 +59,14 @@ int main(int argc, char *argv[]) {
       freeaddrinfo(results);
       close(socketFD);
       fprintf(stderr, "Could not connect.");
+      exit(EXIT_FAILURE);
     } else {
       // connection failed
       if (possible->ai_next == NULL) {
         freeaddrinfo(results);
         close(socketFD);
         fprintf(stderr, "Could not connect to any candidate address.\n");
+        exit(EXIT_FAILURE);
       }
     }
   }

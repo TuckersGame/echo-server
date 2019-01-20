@@ -28,8 +28,8 @@ WARNINGS := -Wall -Wextra -Wpedantic -Wpedantic-errors -Wmissing-include-dirs\
 -Wnormalized=nfc -Wpadded -Wnested-externs
 
 #build-specific compiler options
-OPTIONS := -std=c18 -m64 -fPIC
-LDOPTIONS := -shared -pthread
+OPTIONS := -std=c18 -m64 -fPIC $(shell pkg-config --cflags-only-other openssl)
+LDOPTIONS := -pthread $(shell pkg-config --libs-only-L --libs-only-other openssl)
 DEBUGOPTIONS := -Og -ggdb -Wno-unused
 RELEASEOPTIONS := -O3 -D NDEBUG -Wunused
 
