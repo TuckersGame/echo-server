@@ -115,10 +115,10 @@ int main(int argc, char *argv[]) {
 
   SSL *connection = SSL_new(context);
 
-  if (context == NULL) {
+  if (connection == NULL) {
     SSL_CTX_free(context);
     close(clientFD);
-    fprintf(stderr, "Could not establish TLS connection\n");
+    fprintf(stderr, "Could not establish TLS connection (null connection)\n");
     exit(EXIT_FAILURE);
   }
 
@@ -128,15 +128,16 @@ int main(int argc, char *argv[]) {
     ERR_clear_error();
     SSL_free(connection);
     close(clientFD);
-    fprintf(stderr, "Could not establish TLS connection\n");
+    fprintf(
+        stderr,
+        "Could not establish TLS connection (can't set client socket fd)\n");
     exit(EXIT_FAILURE);
   }
 
-  if (SSL_accept(connection)) {
-    ERR_clear_error();
+  if (SSL_accept(connection) != 1) {
     SSL_free(connection);
     close(clientFD);
-    fprintf(stderr, "Could not establish TLS connection\n");
+    fprintf(stderr, "Could not establish TLS connection (can't accept)\n");
     exit(EXIT_FAILURE);
   }
 
